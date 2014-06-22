@@ -35,11 +35,22 @@ class Ad {
     req.CookieContainer = cookies;
     req.Method = "POST";
     req.ContentType = "application/x-www-form-urlencoded";
-    req.Timeout = 20000;
     req.ContentLength = data.Length;
-    using (Stream stream = await req.GetRequestStreamAsync())
-      await stream.WriteAsync(data, 0, data.Length);
-    var resp = (HttpWebResponse) await req.GetResponseAsync();
+    GLib.Timeout.Add(10000, delegate {
+      req.Abort();
+      return false;
+    });
+    HttpWebResponse resp = null;
+    try {
+      using (Stream stream = await req.GetRequestStreamAsync())
+        await stream.WriteAsync(data, 0, data.Length);
+      resp = (HttpWebResponse) await req.GetResponseAsync();
+    } catch (WebException e) {
+      if (e.Status == WebExceptionStatus.RequestCanceled)
+        throw new WebException("Request timed out", null,
+                               WebExceptionStatus.Timeout, resp);
+      throw;
+    }
     if (resp.StatusCode != HttpStatusCode.OK) {
       throw new WebException("HTTP endpoint returned an error", null,
           (WebExceptionStatus) resp.StatusCode, resp);
@@ -120,8 +131,8 @@ public class AdSubmit : Gtk.Window {
         wnd.Move(x - w / 2 + loginW / 2, y - h / 2 + loginH / 2);
         wnd.Show();
       } catch (WebException e) {
-        ShowError(login, () => { login.Sensitive = true; },
-                  "Error logging in", e.Message);
+        DisplayWebException(login, () => { login.Sensitive = true; },
+                            "Error logging in", e);
       }
     };
 
@@ -208,15 +219,19 @@ public class AdSubmit : Gtk.Window {
       restore();
       return url;
     } catch (WebException e) {
-      var msg = e.Message;
-      var i = e.InnerException;
-      msg += "\nStatus: " + e.Status;
-      if (i != null)
-        msg += "\n" + i.Message;
-      ShowError(this, restore, "Network error submitting dscan",
-          msg);
+      DisplayWebException(this, restore, "Network error submitting dscan", e);
       return null;
     }
+  }
+
+  static void DisplayWebException(Gtk.Window parent, Action after,
+                                  string title, WebException e) {
+    var msg = e.Message;
+    var i = e.InnerException;
+    msg += "\nStatus: " + e.Status;
+    if (i != null)
+      msg += "\n" + i.Message;
+    ShowError(parent, after, title, msg);
   }
 
   static void ShowError(Gtk.Window parent, Action after,
